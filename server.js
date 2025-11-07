@@ -5,9 +5,10 @@ import WebSocket from "ws";
 const app = express();
 expressWs(app); // enable WebSocket support
 
-// Basic health check endpoint
+// --- Health check endpoint ---
 app.get("/", (req, res) => res.send("✅ OpenAI Realtime proxy is running."));
 
+// --- WebSocket endpoint for Twilio ---
 app.ws("/gpt", (client, req) => {
   console.log("🔗 Twilio connected");
 
@@ -16,7 +17,7 @@ app.ws("/gpt", (client, req) => {
   const voice = query.get("voice") || "ballad";
   const instructions =
     query.get("instructions") ||
-    "You are a helpful and friendly AI receptionist. Start immediately by saying: 'Hello! Thanks for calling, how can I help you today?' Then pause and listen.";
+    "You are a helpful and friendly AI receptionist.";
 
   console.log(`🎙️ Voice: ${voice}`);
   console.log(`🧠 Instructions: ${instructions.slice(0, 120)}...`);
@@ -41,14 +42,21 @@ app.ws("/gpt", (client, req) => {
     targetOpen = true;
     console.log("✅ Connected to OpenAI Realtime");
 
-    // Force an instant greeting to keep Twilio connection alive
+    // Send system + user message to force immediate spoken response
     const initMessage = {
       type: "response.create",
       response: {
-        instructions:
-          "You are a helpful and friendly AI receptionist. Start immediately by saying: 'Hello! Thanks for calling, how can I help you today?' Then pause and listen."
+        instructions: instructions,
+        conversation: [
+          {
+            role: "user",
+            content:
+              "A caller has just joined the line. Please greet them warmly and ask how you can help."
+          }
+        ]
       }
     };
+
     target.send(JSON.stringify(initMessage));
   });
 
