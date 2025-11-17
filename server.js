@@ -1,5 +1,6 @@
 // --- server.js ---
-// Render-friendly OpenAI Realtime proxy for Twilio (works with sk-proj keys)
+// OpenAI Realtime proxy for Twilio (Node 22+, Render compatible)
+// ✅ Works with sk-proj keys using ephemeral key exchange
 
 import express from "express";
 import http from "http";
@@ -17,14 +18,15 @@ app.get("/", (_, res) => res.send("✅ OpenAI Realtime proxy is running"));
 wss.on("connection", async (twilio, req) => {
   console.log("🔗 Twilio connected");
 
+  // --- 1️⃣  Extract parameters from Twilio Function URL ---
   const params = new URLSearchParams(req.url.split("?")[1] || "");
   let voice = (params.get("voice") || "alloy").toLowerCase();
   const instructions =
     params.get("instructions") ||
     "You are a friendly and helpful AI receptionist.";
 
-  const allowed = ["alloy", "verse", "copper"];
-  if (!allowed.includes(voice)) {
+  const allowedVoices = ["alloy", "verse", "copper"];
+  if (!allowedVoices.includes(voice)) {
     console.warn(`⚠️ Unsupported voice "${voice}", falling back to alloy`);
     voice = "alloy";
   }
@@ -33,13 +35,13 @@ wss.on("connection", async (twilio, req) => {
   console.log("🧠 Instructions:", instructions.slice(0, 100) + "...");
 
   try {
-    // --- 1️⃣  Create Realtime session  (project-key flow requires beta header)
+    // --- 2️⃣  Create ephemeral Realtime session (project key flow) ---
     const sessionRes = await fetch("https://api.openai.com/v1/realtime/sessions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${OPENAI_KEY}`,
         "Content-Type": "application/json",
-        "OpenAI-Beta": "realtime=v1",        // 👈 critical for sk-proj keys
+        "OpenAI-Beta": "realtime=v1", // required for project keys
       },
       body: JSON.stringify({
         model: "gpt-4o-realtime-preview",
@@ -57,23 +59,28 @@ wss.on("connection", async (twilio, req) => {
     }
 
     const session = await sessionRes.json();
-    const oaUrl = session.client_secret?.value;
-    if (!oaUrl?.startsWith("wss://")) {
-      console.error("❌ Realtime session did not return a WebSocket URL:", session);
+    const ephemeralKey = session.client_secret?.value;
+
+    if (!ephemeralKey?.startsWith("ek_")) {
+      console.error("❌ No ephemeral key returned:", session);
       twilio.close();
       return;
     }
 
-    // --- 2️⃣  Connect to OpenAI Realtime
+    // --- 3️⃣  Connect to OpenAI Realtime WebSocket using ephemeral key ---
+    const oaUrl = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
     const oa = new WebSocket(oaUrl, {
-      headers: { Authorization: `Bearer ${OPENAI_KEY}` },
+      headers: {
+        Authorization: `Bearer ${ephemeralKey}`,
+        "OpenAI-Beta": "realtime=v1",
+      },
     });
 
-    oa.on("open", () => console.log("🧠 OpenAI Realtime connected"));
+    oa.on("open", () => console.log("🧠 OpenAI Realtime connected (ephemeral)"));
     oa.on("close", () => console.log("🧠 OpenAI Realtime closed"));
     oa.on("error", (err) => console.error("❌ OA error:", err.message));
 
-    // --- 3️⃣  Twilio → OpenAI
+    // --- 4️⃣  Twilio → OpenAI ---
     twilio.on("message", (msg) => {
       try {
         const data = JSON.parse(msg);
@@ -91,7 +98,7 @@ wss.on("connection", async (twilio, req) => {
       }
     });
 
-    // --- 4️⃣  OpenAI → Twilio
+    // --- 5️⃣  OpenAI → Twilio ---
     oa.on("message", (msg) => {
       try {
         const data = JSON.parse(msg);
@@ -108,6 +115,7 @@ wss.on("connection", async (twilio, req) => {
       }
     });
 
+    // --- 6️⃣  Clean up when Twilio disconnects ---
     twilio.on("close", () => {
       console.log("❌ Twilio stream closed");
       oa.close();
@@ -118,4 +126,6 @@ wss.on("connection", async (twilio, req) => {
   }
 });
 
-server.listen(PORT, () => console.log(`🚀 Proxy running on port ${PORT}`));
+server.listen(PORT, () =>
+  console.log(`🚀 Proxy running on port ${PORT}`)
+);
