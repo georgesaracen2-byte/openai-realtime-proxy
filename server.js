@@ -1,6 +1,7 @@
 // --- server.js ---
 // OpenAI Realtime proxy for Twilio (Node 22+, Render compatible)
 // ✅ Works with sk-proj keys using ephemeral key exchange
+// ✅ Fixes audio silence by correctly handling base64 μ-law audio payloads
 
 import express from "express";
 import http from "http";
@@ -18,7 +19,7 @@ app.get("/", (_, res) => res.send("✅ OpenAI Realtime proxy is running"));
 wss.on("connection", async (twilio, req) => {
   console.log("🔗 Twilio connected");
 
-  // --- 1️⃣  Extract parameters from Twilio Function URL ---
+  // --- 1️⃣ Extract parameters from Twilio Function URL ---
   const params = new URLSearchParams(req.url.split("?")[1] || "");
   let voice = (params.get("voice") || "alloy").toLowerCase();
   const instructions =
@@ -35,7 +36,7 @@ wss.on("connection", async (twilio, req) => {
   console.log("🧠 Instructions:", instructions.slice(0, 100) + "...");
 
   try {
-    // --- 2️⃣  Create ephemeral Realtime session (project key flow) ---
+    // --- 2️⃣ Create ephemeral Realtime session (project key flow) ---
     const sessionRes = await fetch("https://api.openai.com/v1/realtime/sessions", {
       method: "POST",
       headers: {
@@ -67,7 +68,7 @@ wss.on("connection", async (twilio, req) => {
       return;
     }
 
-    // --- 3️⃣  Connect to OpenAI Realtime WebSocket using ephemeral key ---
+    // --- 3️⃣ Connect to OpenAI Realtime WebSocket using ephemeral key ---
     const oaUrl = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
     const oa = new WebSocket(oaUrl, {
       headers: {
@@ -80,7 +81,7 @@ wss.on("connection", async (twilio, req) => {
     oa.on("close", () => console.log("🧠 OpenAI Realtime closed"));
     oa.on("error", (err) => console.error("❌ OA error:", err.message));
 
-    // --- 4️⃣  Twilio → OpenAI ---
+    // --- 4️⃣ Twilio → OpenAI ---
     twilio.on("message", (msg) => {
       try {
         const data = JSON.parse(msg);
@@ -98,24 +99,36 @@ wss.on("connection", async (twilio, req) => {
       }
     });
 
-    // --- 5️⃣  OpenAI → Twilio ---
+    // --- 5️⃣ OpenAI → Twilio ---
     oa.on("message", (msg) => {
       try {
         const data = JSON.parse(msg);
-        if (data.type === "response.created") console.log("💬 Response started");
-        if (data.type === "output_audio_buffer.append") {
-          twilio.send(JSON.stringify({
-            event: "media",
-            streamSid: "realtime",
-            media: { payload: data.audio },
-          }));
+
+        if (data.type === "response.created") {
+          console.log("💬 Response started");
+        }
+
+        // ✅ Properly stream μ-law audio back to Twilio
+        if (data.type === "output_audio_buffer.append" && data.audio) {
+          const payload = data.audio.replace(/[\r\n]+/g, "");
+          twilio.send(
+            JSON.stringify({
+              event: "media",
+              streamSid: "realtime",
+              media: { payload },
+            })
+          );
+        }
+
+        if (data.type === "response.output_audio_buffer.commit") {
+          twilio.send(JSON.stringify({ event: "mark", mark: { name: "done" } }));
         }
       } catch (e) {
         console.error("Parse error OA→Twilio:", e);
       }
     });
 
-    // --- 6️⃣  Clean up when Twilio disconnects ---
+    // --- 6️⃣ Clean up when Twilio disconnects ---
     twilio.on("close", () => {
       console.log("❌ Twilio stream closed");
       oa.close();
@@ -126,6 +139,4 @@ wss.on("connection", async (twilio, req) => {
   }
 });
 
-server.listen(PORT, () =>
-  console.log(`🚀 Proxy running on port ${PORT}`)
-);
+server.listen(PORT, () => console.log(`🚀 Proxy running on port ${PORT}`));
