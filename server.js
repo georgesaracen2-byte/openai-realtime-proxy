@@ -1,11 +1,11 @@
 // --- server.js ---
-// Render-friendly OpenAI Realtime proxy for Twilio (Node 18+ / 22)
+// Render-friendly OpenAI Realtime proxy for Twilio (Node 22 / free tier)
 
 import express from "express";
 import http from "http";
-import { WebSocketServer, WebSocket } from "ws";  // ✅ ESM-compatible import
+import { WebSocketServer, WebSocket } from "ws"; // ✅ ESM-compatible import
 
-const fetch = global.fetch; // ✅ built-in fetch
+const fetch = global.fetch; // ✅ Node 18+ built-in
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -25,7 +25,7 @@ wss.on("connection", async (twilio, req) => {
     params.get("instructions") ||
     "You are a friendly and helpful AI receptionist.";
 
-  // --- Voice safety: only use supported ones ---
+  // --- Voice safety ---
   const allowedVoices = ["alloy", "verse", "copper"];
   if (!allowedVoices.includes(voice)) {
     console.warn(`⚠️ Unsupported voice "${voice}", falling back to alloy`);
@@ -46,8 +46,9 @@ wss.on("connection", async (twilio, req) => {
       body: JSON.stringify({
         model: "gpt-4o-realtime-preview",
         voice,
-        input_audio_format: "mulaw-8000",
-        output_audio_format: "mulaw-8000",
+        // ✅ Updated audio formats
+        input_audio_format: "g711_ulaw",
+        output_audio_format: "g711_ulaw",
         instructions,
       }),
     });
