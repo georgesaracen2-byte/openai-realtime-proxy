@@ -1,37 +1,42 @@
 // --- server.js ---
-// Minimal, Render-free-tier-friendly OpenAI Realtime proxy for Twilio
+// Render-friendly OpenAI Realtime proxy for Twilio (no external fetch needed)
 
 import express from "express";
 import http from "http";
 import WebSocket from "ws";
 
-const fetch = global.fetch; // ✅ built-in fetch in Node 18+
+const fetch = global.fetch; // ✅ Node’s built-in fetch
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 10000;
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 
-// Landing page for quick sanity check
-app.get("/", (req, res) => {
-  res.send("✅ OpenAI Realtime proxy is running");
-});
+// Simple landing page for sanity check
+app.get("/", (req, res) => res.send("✅ OpenAI Realtime proxy is running"));
 
 wss.on("connection", async (twilio, req) => {
   console.log("🔗 Twilio connected");
 
-  // Extract query params (from Twilio Function)
+  // --- Extract parameters from Twilio Function ---
   const params = new URLSearchParams(req.url.split("?")[1] || "");
-  const voice = params.get("voice") || "alloy"; // alloy / verse / copper
+  let voice = (params.get("voice") || "alloy").toLowerCase();
   const instructions =
     params.get("instructions") ||
     "You are a friendly and helpful AI receptionist.";
+
+  // --- Only allow supported realtime voices ---
+  const allowedVoices = ["alloy", "verse", "copper"];
+  if (!allowedVoices.includes(voice)) {
+    console.warn(`⚠️ Unsupported voice "${voice}", falling back to alloy`);
+    voice = "alloy";
+  }
 
   console.log("🎙️ Voice:", voice);
   console.log("🧠 Instructions:", instructions.slice(0, 100) + "...");
 
   try {
-    // 1️⃣ Create OpenAI Realtime session
+    // --- 1️⃣  Create an OpenAI Realtime session ---
     const sessionRes = await fetch("https://api.openai.com/v1/realtime/sessions", {
       method: "POST",
       headers: {
@@ -61,7 +66,7 @@ wss.on("connection", async (twilio, req) => {
       return;
     }
 
-    // 2️⃣ Connect to OpenAI Realtime
+    // --- 2️⃣  Connect to OpenAI Realtime WS ---
     const oa = new WebSocket(oaUrl, {
       headers: { Authorization: `Bearer ${OPENAI_KEY}` },
     });
@@ -70,17 +75,15 @@ wss.on("connection", async (twilio, req) => {
     oa.on("close", () => console.log("🧠 OpenAI Realtime closed"));
     oa.on("error", (err) => console.error("❌ OA error:", err.message));
 
-    // Twilio → OpenAI
+    // --- 3️⃣  Twilio → OpenAI ---
     twilio.on("message", (msg) => {
       try {
         const data = JSON.parse(msg);
         if (data.event === "media") {
-          oa.send(
-            JSON.stringify({
-              type: "input_audio_buffer.append",
-              audio: data.media.payload,
-            })
-          );
+          oa.send(JSON.stringify({
+            type: "input_audio_buffer.append",
+            audio: data.media.payload,
+          }));
         } else if (data.event === "stop") {
           oa.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
           oa.send(JSON.stringify({ type: "response.create" }));
@@ -90,20 +93,17 @@ wss.on("connection", async (twilio, req) => {
       }
     });
 
-    // OpenAI → Twilio
+    // --- 4️⃣  OpenAI → Twilio ---
     oa.on("message", (msg) => {
       try {
         const data = JSON.parse(msg);
-        if (data.type === "response.created")
-          console.log("💬 Response started");
+        if (data.type === "response.created") console.log("💬 Response started");
         if (data.type === "output_audio_buffer.append") {
-          twilio.send(
-            JSON.stringify({
-              event: "media",
-              streamSid: "realtime",
-              media: { payload: data.audio },
-            })
-          );
+          twilio.send(JSON.stringify({
+            event: "media",
+            streamSid: "realtime",
+            media: { payload: data.audio },
+          }));
         }
       } catch (e) {
         console.error("Parse error OA->Twilio:", e);
