@@ -1,33 +1,30 @@
 // --- server.js ---
-// Render-friendly OpenAI Realtime proxy for Twilio (Node 22 / free tier)
+// Render-friendly OpenAI Realtime proxy for Twilio (works with sk-proj keys)
 
 import express from "express";
 import http from "http";
-import { WebSocketServer, WebSocket } from "ws"; // ✅ ESM-compatible import
+import { WebSocketServer, WebSocket } from "ws";
 
-const fetch = global.fetch; // ✅ Node 18+ built-in
+const fetch = global.fetch;
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 const PORT = process.env.PORT || 10000;
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 
-// Landing page check
-app.get("/", (req, res) => res.send("✅ OpenAI Realtime proxy is running"));
+app.get("/", (_, res) => res.send("✅ OpenAI Realtime proxy is running"));
 
 wss.on("connection", async (twilio, req) => {
   console.log("🔗 Twilio connected");
 
-  // --- Extract params from Twilio Function ---
   const params = new URLSearchParams(req.url.split("?")[1] || "");
   let voice = (params.get("voice") || "alloy").toLowerCase();
   const instructions =
     params.get("instructions") ||
     "You are a friendly and helpful AI receptionist.";
 
-  // --- Voice safety ---
-  const allowedVoices = ["alloy", "verse", "copper"];
-  if (!allowedVoices.includes(voice)) {
+  const allowed = ["alloy", "verse", "copper"];
+  if (!allowed.includes(voice)) {
     console.warn(`⚠️ Unsupported voice "${voice}", falling back to alloy`);
     voice = "alloy";
   }
@@ -36,17 +33,17 @@ wss.on("connection", async (twilio, req) => {
   console.log("🧠 Instructions:", instructions.slice(0, 100) + "...");
 
   try {
-    // --- 1️⃣  Create OpenAI Realtime session ---
+    // --- 1️⃣  Create Realtime session  (project-key flow requires beta header)
     const sessionRes = await fetch("https://api.openai.com/v1/realtime/sessions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${OPENAI_KEY}`,
         "Content-Type": "application/json",
+        "OpenAI-Beta": "realtime=v1",        // 👈 critical for sk-proj keys
       },
       body: JSON.stringify({
         model: "gpt-4o-realtime-preview",
         voice,
-        // ✅ Updated audio formats
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         instructions,
@@ -61,13 +58,13 @@ wss.on("connection", async (twilio, req) => {
 
     const session = await sessionRes.json();
     const oaUrl = session.client_secret?.value;
-    if (!oaUrl) {
-      console.error("❌ No client_secret in session response");
+    if (!oaUrl?.startsWith("wss://")) {
+      console.error("❌ Realtime session did not return a WebSocket URL:", session);
       twilio.close();
       return;
     }
 
-    // --- 2️⃣  Connect to OpenAI Realtime ---
+    // --- 2️⃣  Connect to OpenAI Realtime
     const oa = new WebSocket(oaUrl, {
       headers: { Authorization: `Bearer ${OPENAI_KEY}` },
     });
@@ -76,7 +73,7 @@ wss.on("connection", async (twilio, req) => {
     oa.on("close", () => console.log("🧠 OpenAI Realtime closed"));
     oa.on("error", (err) => console.error("❌ OA error:", err.message));
 
-    // --- 3️⃣  Twilio → OpenAI ---
+    // --- 3️⃣  Twilio → OpenAI
     twilio.on("message", (msg) => {
       try {
         const data = JSON.parse(msg);
@@ -94,7 +91,7 @@ wss.on("connection", async (twilio, req) => {
       }
     });
 
-    // --- 4️⃣  OpenAI → Twilio ---
+    // --- 4️⃣  OpenAI → Twilio
     oa.on("message", (msg) => {
       try {
         const data = JSON.parse(msg);
@@ -121,6 +118,4 @@ wss.on("connection", async (twilio, req) => {
   }
 });
 
-server.listen(PORT, () =>
-  console.log(`🚀 Proxy running on port ${PORT}`)
-);
+server.listen(PORT, () => console.log(`🚀 Proxy running on port ${PORT}`));
