@@ -1,39 +1,37 @@
 // --- server.js ---
-// Twilio <-> OpenAI Realtime bridge  (Node 18+)
+// Minimal, Render-free-tier-friendly OpenAI Realtime proxy for Twilio
+
 import express from "express";
 import http from "http";
 import WebSocket from "ws";
-import fetch from "node-fetch";
 
+const fetch = global.fetch; // ✅ built-in fetch in Node 18+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 10000;
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 
-server.listen(PORT, () => {
-  console.log(`🚀 Proxy running on port ${PORT}`);
+// Landing page for quick sanity check
+app.get("/", (req, res) => {
+  res.send("✅ OpenAI Realtime proxy is running");
 });
 
-// --- optional landing page so you see “Proxy running” ---
-app.get("/", (req, res) => res.send("✅ OpenAI Realtime proxy is running"));
-
-// --- WebSocket bridge ---
 wss.on("connection", async (twilio, req) => {
   console.log("🔗 Twilio connected");
 
-  // Pull parameters from Twilio Function query string
+  // Extract query params (from Twilio Function)
   const params = new URLSearchParams(req.url.split("?")[1] || "");
-  const voice = params.get("voice") || "alloy"; // alloy, verse, or copper work best
+  const voice = params.get("voice") || "alloy"; // alloy / verse / copper
   const instructions =
     params.get("instructions") ||
     "You are a friendly and helpful AI receptionist.";
 
   console.log("🎙️ Voice:", voice);
-  console.log("🧠 Instructions:", instructions.slice(0, 80) + "...");
+  console.log("🧠 Instructions:", instructions.slice(0, 100) + "...");
 
   try {
-    // 1️⃣ Create an OpenAI Realtime session
+    // 1️⃣ Create OpenAI Realtime session
     const sessionRes = await fetch("https://api.openai.com/v1/realtime/sessions", {
       method: "POST",
       headers: {
@@ -50,8 +48,7 @@ wss.on("connection", async (twilio, req) => {
     });
 
     if (!sessionRes.ok) {
-      const text = await sessionRes.text();
-      console.error("❌ Session creation failed:", sessionRes.status, text);
+      console.error("❌ Session creation failed:", sessionRes.status, await sessionRes.text());
       twilio.close();
       return;
     }
@@ -59,7 +56,7 @@ wss.on("connection", async (twilio, req) => {
     const session = await sessionRes.json();
     const oaUrl = session.client_secret?.value;
     if (!oaUrl) {
-      console.error("❌ No OpenAI client_secret in response");
+      console.error("❌ No client_secret in session response");
       twilio.close();
       return;
     }
@@ -85,7 +82,6 @@ wss.on("connection", async (twilio, req) => {
             })
           );
         } else if (data.event === "stop") {
-          // Tell OpenAI to process and respond
           oa.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
           oa.send(JSON.stringify({ type: "response.create" }));
         }
@@ -124,3 +120,6 @@ wss.on("connection", async (twilio, req) => {
   }
 });
 
+server.listen(PORT, () =>
+  console.log(`🚀 Proxy running on port ${PORT}`)
+);
