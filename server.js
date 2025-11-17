@@ -1,31 +1,31 @@
 // --- server.js ---
-// Render-friendly OpenAI Realtime proxy for Twilio (no external fetch needed)
+// Render-friendly OpenAI Realtime proxy for Twilio (Node 18+ / 22)
 
 import express from "express";
 import http from "http";
-import WebSocket from "ws";
+import { WebSocketServer, WebSocket } from "ws";  // ✅ ESM-compatible import
 
-const fetch = global.fetch; // ✅ Node’s built-in fetch
+const fetch = global.fetch; // ✅ built-in fetch
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocketServer({ server });
 const PORT = process.env.PORT || 10000;
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 
-// Simple landing page for sanity check
+// Landing page check
 app.get("/", (req, res) => res.send("✅ OpenAI Realtime proxy is running"));
 
 wss.on("connection", async (twilio, req) => {
   console.log("🔗 Twilio connected");
 
-  // --- Extract parameters from Twilio Function ---
+  // --- Extract params from Twilio Function ---
   const params = new URLSearchParams(req.url.split("?")[1] || "");
   let voice = (params.get("voice") || "alloy").toLowerCase();
   const instructions =
     params.get("instructions") ||
     "You are a friendly and helpful AI receptionist.";
 
-  // --- Only allow supported realtime voices ---
+  // --- Voice safety: only use supported ones ---
   const allowedVoices = ["alloy", "verse", "copper"];
   if (!allowedVoices.includes(voice)) {
     console.warn(`⚠️ Unsupported voice "${voice}", falling back to alloy`);
@@ -36,7 +36,7 @@ wss.on("connection", async (twilio, req) => {
   console.log("🧠 Instructions:", instructions.slice(0, 100) + "...");
 
   try {
-    // --- 1️⃣  Create an OpenAI Realtime session ---
+    // --- 1️⃣  Create OpenAI Realtime session ---
     const sessionRes = await fetch("https://api.openai.com/v1/realtime/sessions", {
       method: "POST",
       headers: {
@@ -66,7 +66,7 @@ wss.on("connection", async (twilio, req) => {
       return;
     }
 
-    // --- 2️⃣  Connect to OpenAI Realtime WS ---
+    // --- 2️⃣  Connect to OpenAI Realtime ---
     const oa = new WebSocket(oaUrl, {
       headers: { Authorization: `Bearer ${OPENAI_KEY}` },
     });
@@ -89,7 +89,7 @@ wss.on("connection", async (twilio, req) => {
           oa.send(JSON.stringify({ type: "response.create" }));
         }
       } catch (e) {
-        console.error("Parse error Twilio->OA:", e);
+        console.error("Parse error Twilio→OA:", e);
       }
     });
 
@@ -106,7 +106,7 @@ wss.on("connection", async (twilio, req) => {
           }));
         }
       } catch (e) {
-        console.error("Parse error OA->Twilio:", e);
+        console.error("Parse error OA→Twilio:", e);
       }
     });
 
